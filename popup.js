@@ -100,18 +100,24 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Quiz Harvester Button
+  // Quiz Harvester Button (explicitly activates via tab injection)
   if (harvestQuizBtn) {
     harvestQuizBtn.addEventListener("click", () => {
-      chrome.storage.local.set({
-        [QUIZ_STORAGE_KEY]: {
-          state: "HARVESTING",
-          harvested: {},
-          answers: {},
-          batchPrompt: ""
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+              sessionStorage.setItem("oa_quiz_harvest_active", "true");
+              sessionStorage.removeItem("oa_quiz_solving_active");
+              const harvestBtn = document.getElementById("oa-quiz-harvest-btn");
+              if (harvestBtn) {
+                harvestBtn.click();
+              }
+            }
+          });
+          window.close();
         }
-      }, () => {
-        window.close();
       });
     });
   }

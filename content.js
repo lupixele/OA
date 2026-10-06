@@ -61,6 +61,17 @@
     if (res[STORAGE_KEY]) config = { ...DEFAULT_CONFIG, ...res[STORAGE_KEY] };
     if (res[QUIZ_STORAGE_KEY]) quizData = { ...DEFAULT_QUIZ, ...res[QUIZ_STORAGE_KEY] };
 
+    // USER CONSENT SAFEGUARD:
+    // If this tab does not have an active in-flight harvest or solve session,
+    // NEVER automatically start harvesting or answering!
+    const isHarvestActive = sessionStorage.getItem("oa_quiz_harvest_active") === "true";
+    const isSolvingActive = sessionStorage.getItem("oa_quiz_solving_active") === "true";
+
+    if (!isHarvestActive && !isSolvingActive) {
+      quizData.state = "IDLE";
+      saveQuizData({ state: "IDLE" });
+    }
+
     if (getPageType() === "OUTLINE" && !window.location.href.includes("SAVE")) {
       config.outlineUrl = window.location.href;
       chrome.storage.local.set({ [STORAGE_KEY]: config });
@@ -72,10 +83,15 @@
     const pageType = getPageType();
     if (pageType === "QUIZ") {
       bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
-      // Wait for dynamic APEX questions and choices to render before acting
-      waitForQuizReady((qInfo) => {
-        handleQuizLifecycle(qInfo);
-      });
+      // ONLY run lifecycle if user explicitly started harvesting/solving in this tab session
+      if (isHarvestActive || isSolvingActive) {
+        waitForQuizReady((qInfo) => {
+          handleQuizLifecycle(qInfo);
+        });
+      } else {
+        setHUDBadge("IDLE", "stopped");
+        setHUDLog("Quiz ready. Click 'Harvest Questions' when you want to begin.");
+      }
     } else if (config.active) {
       bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
       scheduleCourseRun();
@@ -218,8 +234,12 @@
     setHUDCurrentItem(`Question ${qInfo.qNum} of ${qInfo.totalQ}`);
     bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
 
+    // Double check consent
+    const isHarvestActive = sessionStorage.getItem("oa_quiz_harvest_active") === "true";
+    const isSolvingActive = sessionStorage.getItem("oa_quiz_solving_active") === "true";
+
     // --- STATE 1: HARVESTING ---
-    if (quizData.state === "HARVESTING") {
+    if (quizData.state === "HARVESTING" && isHarvestActive) {
       setHUDBadge("HARVESTING", "running");
       setHUDLog(`Extracting Q${qInfo.qNum}/${qInfo.totalQ}...`);
 
@@ -266,7 +286,7 @@
     }
 
     // --- STATE 2: REWINDING ---
-    if (quizData.state === "REWINDING") {
+    if (quizData.state === "REWINDING" && isHarvestActive) {
       setHUDBadge("REWINDING", "quiz");
 
       if (qInfo.qNum > 1) {
@@ -275,7 +295,9 @@
           bridgeMsg("OA_BRIDGE_PREV_QUIZ");
         }, 400);
       } else {
-        // Returned to Question 1!
+        // Returned to Question 1! Turn off harvest active flag
+        sessionStorage.removeItem("oa_quiz_harvest_active");
+
         const prompt = generateBatchPrompt(quizData.harvested, quizData.totalQuestions);
         saveQuizData({
           state: "AWAITING_ANSWERS",
@@ -304,7 +326,7 @@
     }
 
     // --- STATE 4: SOLVING ---
-    if (quizData.state === "SOLVING") {
+    if (quizData.state === "SOLVING" && isSolvingActive) {
       setHUDBadge("SOLVING", "running");
 
       const targetLetter = (quizData.answers[qInfo.qNum] || "").toUpperCase();
@@ -330,6 +352,7 @@
           }, 450);
         } else {
           // CRITICAL: DO NOT SUBMIT ON LAST QUESTION!
+          sessionStorage.removeItem("oa_quiz_solving_active");
           setHUDBadge("DONE", "stopped");
           setHUDLog(`🎉 All questions answered! Q${qInfo.qNum} selected. NOT SUBMITTED.`);
           saveQuizData({ state: "IDLE" });
@@ -339,7 +362,9 @@
       return;
     }
 
-    setHUDBadge("QUIZ READY", "stopped");
+    // Not actively harvesting or solving -> Stay IDLE
+    setHUDBadge("IDLE", "stopped");
+    setHUDLog("Quiz ready. Click 'Harvest Questions' when you want to begin.");
   }
 
   // --- Show Quiz Prompt & Solver Modal ---
@@ -401,6 +426,8 @@
       }
 
       hideQuizModal();
+      sessionStorage.setItem("oa_quiz_solving_active", "true");
+      sessionStorage.removeItem("oa_quiz_harvest_active");
       saveQuizData({
         answers: parsedAnswers,
         state: "SOLVING"
@@ -642,13 +669,17 @@
 
     if (isQuizPage) {
       document.getElementById("oa-quiz-harvest-btn").addEventListener("click", () => {
+        sessionStorage.setItem("oa_quiz_harvest_active", "true");
+        sessionStorage.removeItem("oa_quiz_solving_active");
         saveQuizData({
           state: "HARVESTING",
           harvested: {},
           answers: {},
           batchPrompt: ""
         });
-        waitForQuizReady(handleQuizLifecycle);
+        waitForQuizReady((qInfo) => {
+          handleQuizLifecycle(qInfo);
+        });
       });
 
       document.getElementById("oa-quiz-modal-btn").addEventListener("click", () => {
@@ -657,8 +688,11 @@
       });
 
       document.getElementById("oa-quiz-reset-btn").addEventListener("click", () => {
+        sessionStorage.removeItem("oa_quiz_harvest_active");
+        sessionStorage.removeItem("oa_quiz_solving_active");
         saveQuizData(DEFAULT_QUIZ);
-        setHUDLog("Quiz solver reset to IDLE.");
+        setHUDBadge("IDLE", "stopped");
+        setHUDLog("Quiz solver reset to IDLE. Nothing will run without your consent.");
       });
     } else {
       document.getElementById("oa-toggle-btn").addEventListener("click", () => {
