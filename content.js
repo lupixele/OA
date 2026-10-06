@@ -20,8 +20,8 @@
   const DEFAULT_QUIZ = {
     state: "IDLE", // IDLE | HARVESTING | REWINDING | AWAITING_ANSWERS | SOLVING
     totalQuestions: 0,
-    harvested: {}, // { [qNum]: { q_num, total_q, text, is_multi, options: ["Race", "Eye color", ...] } }
-    answers: {},   // { [qNum]: ["Age"] or ["Tables", "Columns"] }
+    harvested: {}, // { [qNum]: { q_num, total_q, text, is_multi, options: ["Option A", "Option B"] } }
+    answers: {},   // { [qNum]: ["Option A"] }
     batchPrompt: ""
   };
 
@@ -41,11 +41,10 @@
     return /\b(quiz|exam|test|assessment|midterm|final|cumulative)\b/i.test(lower);
   }
 
-  // --- HTML Unescape & Text Normalization for Robust String Matching ---
+  // --- HTML Entity Decode & Normalize String ---
   function normalizeText(str) {
     if (!str) return "";
     let s = str;
-    // Decode common entities
     s = s.replace(/&amp;/g, "&").replace(/&#x20;/g, " ").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
     s = s.toLowerCase();
     s = s.replace(/[^\w\s]/g, " ");
@@ -135,11 +134,11 @@
   }
 
   // =========================================================================
-  // QUIZ ENGINE: PURE STRING-MATCHING & BATCH PROMPT GENERATOR
+  // QUIZ ENGINE: STRING-MATCHING & BATCH SOLVER
   // =========================================================================
 
   function parseCurrentQuestionDOM() {
-    // 1. Question Sequence & Total Count
+    // 1. Question Number & Total Count
     const seqInput = document.getElementById("P190_QUESTION_SEQUENCE");
     const countInput = document.getElementById("P190_QUESTION_COUNT");
 
@@ -155,7 +154,7 @@
       }
     }
 
-    // 2. Multi-choice detection
+    // 2. Multi-choice check
     const onlyOneInput = document.getElementById("P190_ONLY_ONE_CHOICE");
     const choicesHeading = document.getElementById("collapse-Choices-reg_heading")?.innerText || "";
     let isMulti = false;
@@ -175,7 +174,7 @@
       qText = clone.innerText.replace(/[\n\r]+/g, " ").replace(/\s+/g, " ").trim();
     }
 
-    // 4. Extract live options as pure text strings
+    // 4. Extract options as clean text strings
     const choiceButtons = Array.from(document.querySelectorAll(".choice-SelectArea"));
     const options = choiceButtons.map((btn, idx) => {
       const textSpan = btn.querySelector(".choice-Text");
@@ -204,24 +203,21 @@
     poll();
   }
 
-  // GENERATE PURE STRING BATCH PROMPT FOR AI
+  // Pure String Batch Prompt
   function generateBatchPrompt(harvested, totalQ) {
-    let prompt = `You are an expert academic assessment solver. Below is a batch of multiple-choice questions from an online assessment.\n`;
-    prompt += `IMPORTANT: The assessment platform does NOT use option letters (A, B, C, D) and constantly jumbles option order. You MUST output the EXACT text of the correct option string for each question.\n\n`;
-    prompt += `CRITICAL OUTPUT FORMAT INSTRUCTIONS:\n`;
+    let prompt = `You are an expert assessment solver. Below is a batch of questions from an assessment.\n`;
+    prompt += `IMPORTANT: The testing portal constantly shuffles option order and does not use letters. You MUST output the EXACT text of the correct option.\n\n`;
+    prompt += `CRITICAL OUTPUT FORMAT:\n`;
     prompt += `1. Output strictly one line per question in this format:\n`;
     prompt += `<Question Number>: <Exact Option Text>\n\n`;
     prompt += `2. For single-choice questions:\n`;
-    prompt += `Output the question number and the exact option string.\n`;
-    prompt += `Example:\n`;
     prompt += `1: Age\n`;
     prompt += `2: True\n\n`;
     prompt += `3. For multi-choice questions (marked [MULTI-CHOICE]):\n`;
-    prompt += `Output all correct option strings separated by a pipe ' | '.\n`;
-    prompt += `Example:\n`;
+    prompt += `Separate correct option texts with a pipe ' | ':\n`;
     prompt += `3: Tables | Columns\n\n`;
     prompt += `4. Do NOT use option letters (A, B, C, D). Output the exact wording of the option.\n`;
-    prompt += `5. Do NOT include explanations, reasoning, or conversational text so answers can be parsed by an automated script.\n\n`;
+    prompt += `5. Do NOT include explanations or extra text.\n\n`;
     prompt += `--- QUESTIONS BATCH ---\n\n`;
 
     const keys = Object.keys(harvested).map(k => parseInt(k, 10)).sort((a, b) => a - b);
@@ -239,7 +235,7 @@
     return prompt;
   }
 
-  // ROBUST STRING-BASED ANSWER PARSER
+  // Answer Parser: Handles exact text strings, pipes, and strips legacy letter prefixes
   function parseAIAnswersText(rawText) {
     const answers = {};
     const lines = rawText.trim().split("\n");
@@ -248,11 +244,9 @@
       let cleaned = line.trim();
       if (!cleaned) continue;
 
-      // Remove markdown list bullets & formatting
       cleaned = cleaned.replace(/^\s*[-*•]\s*/, "");
       cleaned = cleaned.replace(/\*\*/g, "").replace(/__/g, "").replace(/\*/g, "");
 
-      // Match question number prefix
       const m = cleaned.match(/^(?:Question|Q)?\s*(\d+)\s*(?:[\.:\)\-\–—]|\s)\s*(.*)$/i);
       if (!m) continue;
 
@@ -260,10 +254,9 @@
       let ansPart = m.group(2).trim();
       if (!ansPart) continue;
 
-      // Strip leading legacy letter prefix if AI accidentally included it (e.g. "C - Age" -> "Age")
+      // Strip legacy single-letter prefix if present: e.g. "C - Age" -> "Age", "A. True" -> "True"
       ansPart = ansPart.replace(/^[A-Fa-f]\s*[\.:\)\-\–—]\s*/, "");
 
-      // Split multi-options by pipe '|' or semicolon ';'
       let optionStrings = [];
       if (ansPart.includes("|")) {
         optionStrings = ansPart.split("|").map(s => s.trim()).filter(Boolean);
@@ -281,7 +274,7 @@
     return answers;
   }
 
-  // PURE STRING MATCHING AGAINST LIVE JUMBLED OPTIONS ON THE PAGE
+  // Matches AI string answers against whatever jumbled options are live on the page
   function matchLiveOptionsByString(targetAnswerStrings, liveOptionsOnPage) {
     const matchedIndices = [];
 
@@ -297,7 +290,7 @@
         if (!liveNorm) continue;
 
         let score = 0;
-        // 1. Exact normalized match
+        // 1. Exact match
         if (targetNorm === liveNorm) {
           score = 1000;
         }
@@ -353,7 +346,7 @@
         total_q: qInfo.totalQ,
         text: qInfo.qText,
         is_multi: qInfo.isMulti,
-        options: qInfo.options.map(o => o.text) // Store pure string options
+        options: qInfo.options.map(o => o.text)
       };
 
       const isLastQuestion = qInfo.qNum >= qInfo.totalQ;
@@ -430,7 +423,7 @@
     // --- STATE 3: AWAITING ANSWERS ---
     if (quizData.state === "AWAITING_ANSWERS") {
       setHUDBadge("AWAITING AI", "quiz");
-      setHUDLog("Questions harvested. Paste AI string answers in modal to solve.");
+      setHUDLog("Questions harvested. Paste AI answers in modal to solve.");
       showQuizModal(quizData.batchPrompt);
       return;
     }
@@ -439,7 +432,8 @@
     if (quizData.state === "SOLVING" && isSolvingActive) {
       setHUDBadge("SOLVING", "running");
 
-      const targetStrings = quizData.answers[qInfo.qNum] || [];
+      // Robust key lookup: check both integer qNum and string qNum
+      const targetStrings = (quizData.answers && (quizData.answers[qInfo.qNum] || quizData.answers[String(qInfo.qNum)])) || [];
 
       // Match target option strings directly against the live jumbled options on this page
       const targetIndices = matchLiveOptionsByString(targetStrings, qInfo.options);
@@ -498,7 +492,7 @@
             <div class="oa-response-box">
               <div class="oa-box-title">
                 <span>Paste AI Response (Option strings matching):</span>
-                <span style="font-size: 11px; color: #94a3b8;">Format: 1: Age | 2: True | 3: Tables | Columns</span>
+                <span style="font-size: 11px; color: #94a3b8;">Format: 1: Option Text | 2: True | 3: A | B</span>
               </div>
               <textarea id="oa-response-textarea" class="oa-textarea" rows="6" placeholder="1: Age&#10;2: True&#10;3: Tables | Columns&#10;..."></textarea>
             </div>
@@ -530,7 +524,7 @@
       const parsedAnswers = parseAIAnswersText(respText);
 
       if (Object.keys(parsedAnswers).length === 0) {
-        alert("Please paste the AI answers in the format:\n1: Age\n2: True\n3: Tables | Columns\n...");
+        alert("Please paste the AI answers in the format:\n1: Option Text\n2: True\n3: Option 1 | Option 2\n...");
         return;
       }
 
@@ -541,7 +535,9 @@
         answers: parsedAnswers,
         state: "SOLVING"
       });
-      waitForQuizReady(handleQuizLifecycle);
+      waitForQuizReady((qInfo) => {
+        handleQuizLifecycle(qInfo);
+      });
     });
   }
 
@@ -749,7 +745,7 @@
         </div>
         <div class="oa-hud-header-actions">
           <div id="oa-status-badge" class="oa-hud-status-badge stopped">OFF</div>
-          <button id="oa-minimize-btn" class="oa-hud-min-btn" title="Minimize to wall pill">−</button>
+          <button id="oa-minimize-btn" class="oa-hud-min-btn" title="Minimize to side pill">−</button>
         </div>
       </div>
       <div class="oa-hud-body">
@@ -788,7 +784,6 @@
 
     document.body.appendChild(hud);
 
-    // Minimize button toggle
     const minBtn = document.getElementById("oa-minimize-btn");
     minBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -796,7 +791,6 @@
       localStorage.setItem("oa_hud_minimized", "true");
     });
 
-    // Clicking minimized pill expands it back
     hud.addEventListener("click", () => {
       if (hud.classList.contains("minimized")) {
         hud.classList.remove("minimized");

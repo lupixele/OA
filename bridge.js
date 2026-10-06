@@ -24,17 +24,18 @@
     if (event.data.type === "OA_BRIDGE_CLICK_SAVE") {
       suppressWarnings();
       try {
-        if (window.apex && window.apex.jQuery) {
+        const b = document.getElementById("nextModButton");
+        if (b) {
+          b.click();
+        } else if (window.apex && window.apex.jQuery) {
           window.apex.jQuery("#nextModButton").trigger("click");
         }
-        const b = document.getElementById("nextModButton");
-        if (b) b.click();
       } catch (err) {
         console.warn("[OA-Bridge] Save click err:", err);
       }
     }
 
-    // 2. QUIZ SELECT CHOICE(S) (SUPPORTS SINGLE AND MULTI OPTIONS)
+    // 2. QUIZ SELECT CHOICE(S) (SINGLE & MULTI)
     if (event.data.type === "OA_BRIDGE_SELECT_CHOICE" || event.data.type === "OA_BRIDGE_SELECT_CHOICES") {
       const indices = Array.isArray(event.data.indices)
         ? event.data.indices
@@ -44,7 +45,7 @@
         const choiceBtns = Array.from(document.querySelectorAll(".choice-SelectArea"));
         if (!choiceBtns.length) return;
 
-        // Clear all existing choices first
+        // Clear existing selections first
         if (typeof clearAllChoices === "function") {
           clearAllChoices();
         } else {
@@ -57,23 +58,20 @@
           });
         }
 
-        // Apply selection for all specified indices
+        // Apply selections directly to APEX state without double-toggling
         indices.forEach(idx => {
           if (choiceBtns[idx]) {
             const btn = choiceBtns[idx];
 
-            if (typeof toggleChoice === "function" && window.$) {
-              toggleChoice(window.$(btn));
-            } else if (window.apex && window.apex.jQuery) {
-              window.apex.jQuery(btn).trigger("click");
+            // Set hidden choice input to Y
+            const hiddenChoice = btn.querySelector(".qzlab-choice") || btn.querySelector('input[name="f01"]');
+            if (hiddenChoice) {
+              hiddenChoice.value = "Y";
+              if (window.$) window.$(hiddenChoice).val("Y");
             }
 
-            btn.click();
+            // Set visual aria and icon
             btn.setAttribute("aria-checked", "true");
-
-            const hiddenChoice = btn.querySelector(".qzlab-choice") || btn.querySelector('input[name="f01"]');
-            if (hiddenChoice) hiddenChoice.value = "Y";
-
             const icon = btn.querySelector(".choice-Icon");
             if (icon) {
               icon.classList.remove("fa-square-o");
@@ -82,7 +80,7 @@
           }
         });
 
-        // Force validation & enable submit
+        // Trigger APEX state setters and enable submit
         if (typeof checkSubmitButton === "function") checkSubmitButton();
         if (typeof enableSubmitButton === "function") enableSubmitButton();
         if (window.apex && window.apex.item) {
@@ -102,7 +100,7 @@
       }
     }
 
-    // 3. QUIZ SUBMIT ANSWER
+    // 3. QUIZ SUBMIT ANSWER (EXACTLY ONCE)
     if (event.data.type === "OA_BRIDGE_SUBMIT_QUIZ") {
       suppressWarnings();
       try {
@@ -111,26 +109,26 @@
           submitBtn.disabled = false;
           submitBtn.classList.remove("apex_disabled");
           submitBtn.click();
-        }
-        if (window.apex && window.apex.submit) {
+        } else if (window.apex && window.apex.submit) {
           window.apex.submit({ request: "SUBMIT", validate: true });
         }
+        console.log("[OA-Bridge] Submitted quiz answer.");
       } catch (err) {
         console.warn("[OA-Bridge] Quiz submit err:", err);
       }
     }
 
-    // 4. QUIZ PREVIOUS QUESTION
+    // 4. QUIZ PREVIOUS QUESTION (EXACTLY ONCE)
     if (event.data.type === "OA_BRIDGE_PREV_QUIZ") {
       suppressWarnings();
       try {
         const prevBtn = document.querySelector("button[data-otel-label='PREVIOUS'], button#B102387680792266124");
         if (prevBtn) {
           prevBtn.click();
-        }
-        if (window.apex && window.apex.submit) {
+        } else if (window.apex && window.apex.submit) {
           window.apex.submit({ request: "PREVIOUS", validate: true });
         }
+        console.log("[OA-Bridge] Navigated to previous question.");
       } catch (err) {
         console.warn("[OA-Bridge] Quiz prev err:", err);
       }
