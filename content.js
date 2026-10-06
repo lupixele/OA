@@ -250,8 +250,8 @@
       const m = cleaned.match(/^(?:Question|Q)?\s*(\d+)\s*(?:[\.:\)\-\–—]|\s)\s*(.*)$/i);
       if (!m) continue;
 
-      const qNum = parseInt(m.group(1), 10);
-      let ansPart = m.group(2).trim();
+      const qNum = parseInt(m[1], 10);
+      let ansPart = m[2].trim();
       if (!ansPart) continue;
 
       // Strip legacy single-letter prefix if present: e.g. "C - Age" -> "Age", "A. True" -> "True"
