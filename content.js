@@ -20,8 +20,8 @@
   const DEFAULT_QUIZ = {
     state: "IDLE", // IDLE | HARVESTING | REWINDING | AWAITING_ANSWERS | SOLVING
     totalQuestions: 0,
-    harvested: {}, // { [qNum]: { q_num, total_q, text, options: [{ label, text, index }] } }
-    answers: {},   // { [qNum]: "C" }
+    harvested: {}, // { [qNum]: { q_num, total_q, text, is_multi, options: [{ label, text, index }] } }
+    answers: {},   // { [qNum]: ["A", "C"] }
     batchPrompt: ""
   };
 
@@ -39,6 +39,17 @@
     if (!text) return false;
     const lower = text.toLowerCase().trim();
     return /\b(quiz|exam|test|assessment|midterm|final|cumulative)\b/i.test(lower);
+  }
+
+  // --- Text Normalizer for Robust Shuffled Matching ---
+  function normalizeText(str) {
+    if (!str) return "";
+    return str
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/[^\w\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
   }
 
   // --- Page Classifier ---
@@ -62,8 +73,6 @@
     if (res[QUIZ_STORAGE_KEY]) quizData = { ...DEFAULT_QUIZ, ...res[QUIZ_STORAGE_KEY] };
 
     // USER CONSENT SAFEGUARD:
-    // If this tab does not have an active in-flight harvest or solve session,
-    // NEVER automatically start harvesting or answering!
     const isHarvestActive = sessionStorage.getItem("oa_quiz_harvest_active") === "true";
     const isSolvingActive = sessionStorage.getItem("oa_quiz_solving_active") === "true";
 
@@ -83,7 +92,6 @@
     const pageType = getPageType();
     if (pageType === "QUIZ") {
       bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
-      // ONLY run lifecycle if user explicitly started harvesting/solving in this tab session
       if (isHarvestActive || isSolvingActive) {
         waitForQuizReady((qInfo) => {
           handleQuizLifecycle(qInfo);
@@ -126,7 +134,7 @@
   }
 
   // =========================================================================
-  // QUIZ ENGINE: ROBUST EXTRACTION & SOLVER
+  // QUIZ ENGINE: SHUFFLE-RESILIENT EXTRACTION, PARSING & SOLVER
   // =========================================================================
 
   function parseCurrentQuestionDOM() {
@@ -146,7 +154,17 @@
       }
     }
 
-    // 2. Question Text
+    // 2. Multi-choice check
+    const onlyOneInput = document.getElementById("P190_ONLY_ONE_CHOICE");
+    const choicesHeading = document.getElementById("collapse-Choices-reg_heading")?.innerText || "";
+    let isMulti = false;
+    if (onlyOneInput && onlyOneInput.value === "N") {
+      isMulti = true;
+    } else if (/choose\s+(?:two|three|all)|multiple/i.test(choicesHeading)) {
+      isMulti = true;
+    }
+
+    // 3. Question Text
     let qText = "";
     const dynElem = document.querySelector('a-dynamic-content[region-id="question-Text"]') ||
                     document.getElementById("question-Text");
@@ -156,7 +174,7 @@
       qText = clone.innerText.replace(/[\n\r]+/g, " ").replace(/\s+/g, " ").trim();
     }
 
-    // 3. Choices
+    // 4. Choices
     const choiceButtons = Array.from(document.querySelectorAll(".choice-SelectArea"));
     const options = choiceButtons.map((btn, idx) => {
       const textSpan = btn.querySelector(".choice-Text");
@@ -166,10 +184,10 @@
       return { label, text, index: idx, element: btn };
     });
 
-    return { qNum, totalQ, qText, options };
+    return { qNum, totalQ, qText, isMulti, options };
   }
 
-  // Poll until dynamic question and options are fully rendered by Oracle APEX
+  // Poll until dynamic question and options render
   function waitForQuizReady(callback, maxWaitMs = 5000) {
     const startTime = Date.now();
 
@@ -188,18 +206,22 @@
   }
 
   function generateBatchPrompt(harvested, totalQ) {
-    let prompt = `You are an expert assessment solver. Below is a batch of multiple-choice questions from an assessment.\n`;
-    prompt += `Analyze each question carefully and provide the single correct answer letter (A, B, C, D, etc.).\n\n`;
-    prompt += `STRICT OUTPUT REQUIREMENT:\n`;
-    prompt += `Output ONLY the question number followed by the correct option letter, one per line.\n`;
-    prompt += `Do NOT include any explanations, markdown titles, or additional text.\n\n`;
-    prompt += `FORMAT EXAMPLE:\n1: C\n2: A\n3: D\n...\n\n`;
+    let prompt = `You are an expert assessment solver. Below is a batch of questions from an assessment.\n`;
+    prompt += `Analyze each question carefully and provide the correct option letter(s) and option text.\n\n`;
+    prompt += `CRITICAL INSTRUCTIONS:\n`;
+    prompt += `1. For single-choice questions: Output ONLY the question number followed by the correct option letter (e.g., '1: C' or '1: C - Age').\n`;
+    prompt += `2. For multi-choice questions (marked [MULTI-CHOICE]): Output all correct options separated by commas (e.g., '2: A, C' or '2: Tables, Columns').\n`;
+    prompt += `3. Output format must strictly be:\n`;
+    prompt += `<Question Number>: <Option Letter(s)> [Optional Text]\n\n`;
+    prompt += `FORMAT EXAMPLE:\n1: C - Age\n2: A, D - Tables, Columns\n3: B\n...\n\n`;
+    prompt += `Do NOT include any explanations or reasoning so answers can be parsed automatically.\n\n`;
     prompt += `--- QUESTIONS BATCH ---\n\n`;
 
     const keys = Object.keys(harvested).map(k => parseInt(k, 10)).sort((a, b) => a - b);
     for (const num of keys) {
       const q = harvested[num];
-      prompt += `Question ${num}: ${q.text}\n`;
+      const multiTag = q.is_multi ? " [MULTI-CHOICE: Select all that apply]" : "";
+      prompt += `Question ${num}${multiTag}:\n${q.text}\n`;
       for (const opt of q.options) {
         prompt += `${opt.label}. ${opt.text}\n`;
       }
@@ -209,20 +231,130 @@
     return prompt;
   }
 
+  // Robust Multi-Option Parser
   function parseAIAnswersText(rawText) {
     const answers = {};
     const lines = rawText.trim().split("\n");
+
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const match = trimmed.match(/^(?:Q(?:uestion)?\s*)?(\d+)[\s.:\)-]+([A-Za-z0-9]+)/i);
-      if (match) {
-        const qNum = parseInt(match[1], 10);
-        const ans = match[2].trim().toUpperCase();
-        answers[qNum] = ans;
+      let cleaned = line.trim();
+      if (!cleaned) continue;
+
+      cleaned = cleaned.replace(/^\s*[-*•]\s*/, "");
+      cleaned = cleaned.replace(/\*\*/g, "").replace(/__/g, "").replace(/\*/g, "");
+
+      const m = cleaned.match(/^(?:Question|Q)?\s*(\d+)\s*(?:[\.:\)\-\–—]|\s)\s*(.*)$/i);
+      if (!m) continue;
+
+      const qNum = parseInt(m.group(1), 10);
+      const ansPart = m.group(2).trim();
+
+      const norm = ansPart.replace(/\b(?:and|or)\b|[&+/]/gi, ",");
+
+      if (/^\s*true\b/i.test(norm)) {
+        answers[qNum] = ["A"];
+        continue;
+      }
+      if (/^\s*false\b/i.test(norm)) {
+        answers[qNum] = ["B"];
+        continue;
+      }
+
+      const parts = norm.split(/[,;]+/).map(p => p.trim()).filter(Boolean);
+      const letters = [];
+
+      for (const p of parts) {
+        const matchLetter = p.match(/^([A-Fa-f])(?:\s*[\.:\)\-\–—\(\]\}]|\s+[A-Za-z]|$)/);
+        if (matchLetter) {
+          const l = matchLetter[1].toUpperCase();
+          if (!letters.includes(l)) letters.push(l);
+        } else {
+          const singleM = p.match(/^([A-Fa-f])$/);
+          if (singleM) {
+            const l = singleM[1].toUpperCase();
+            if (!letters.includes(l)) letters.push(l);
+          }
+        }
+      }
+
+      if (!letters.length) {
+        const comboM = ansPart.match(/^([A-Fa-f]{1,6})\b/);
+        if (comboM) {
+          for (const ch of comboM[1].toUpperCase()) {
+            if (!letters.includes(ch)) letters.push(ch);
+          }
+        }
+      }
+
+      if (letters.length > 0) {
+        answers[qNum] = letters;
       }
     }
+
     return answers;
+  }
+
+  // Robust Shuffled Option Matcher:
+  // Maps the answer letters (or text) back to the HARVESTED text strings,
+  // then searches the LIVE shuffled DOM to find the exact matching option index!
+  function resolveShuffledIndices(targetAnswers, liveOptions, harvestedOptions) {
+    // 1. Convert targetAnswers (letters A-F) to full target text strings using harvested metadata
+    const targetTexts = [];
+    for (const ans of targetAnswers) {
+      const ansClean = ans.trim();
+      if (ansClean.length === 1 && "ABCDEF".includes(ansClean.toUpperCase()) && harvestedOptions) {
+        const harvestedOpt = harvestedOptions.find(o => o.label === ansClean.toUpperCase());
+        if (harvestedOpt && harvestedOpt.text) {
+          targetTexts.push(harvestedOpt.text);
+        } else {
+          targetTexts.push(ansClean);
+        }
+      } else {
+        targetTexts.push(ansClean);
+      }
+    }
+
+    console.log("[OA-Progressor] Target answer texts for question:", targetTexts);
+
+    // 2. Match targetTexts against the liveOptions currently on the page
+    const matchedIndices = [];
+
+    for (const targetText of targetTexts) {
+      const targetNorm = normalizeText(targetText);
+      let bestIdx = -1;
+
+      // Match A: Exact normalized text equality
+      for (let i = 0; i < liveOptions.length; i++) {
+        const liveNorm = normalizeText(liveOptions[i].text);
+        if (liveNorm === targetNorm) {
+          bestIdx = i;
+          break;
+        }
+      }
+
+      // Match B: Normalized substring / contains match
+      if (bestIdx === -1) {
+        for (let i = 0; i < liveOptions.length; i++) {
+          const liveNorm = normalizeText(liveOptions[i].text);
+          if (liveNorm.length > 2 && (liveNorm.includes(targetNorm) || targetNorm.includes(liveNorm))) {
+            bestIdx = i;
+            break;
+          }
+        }
+      }
+
+      // Match C: Fallback to letter position if text didn't match
+      if (bestIdx === -1 && targetText.length === 1 && "ABCDEF".includes(targetText.toUpperCase())) {
+        const letterFound = liveOptions.find(o => o.label === targetText.toUpperCase());
+        if (letterFound) bestIdx = letterFound.index;
+      }
+
+      if (bestIdx !== -1 && !matchedIndices.includes(bestIdx)) {
+        matchedIndices.push(bestIdx);
+      }
+    }
+
+    return matchedIndices;
   }
 
   function handleQuizLifecycle(qInfo) {
@@ -234,7 +366,6 @@
     setHUDCurrentItem(`Question ${qInfo.qNum} of ${qInfo.totalQ}`);
     bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
 
-    // Double check consent
     const isHarvestActive = sessionStorage.getItem("oa_quiz_harvest_active") === "true";
     const isSolvingActive = sessionStorage.getItem("oa_quiz_solving_active") === "true";
 
@@ -248,22 +379,29 @@
         q_num: qInfo.qNum,
         total_q: qInfo.totalQ,
         text: qInfo.qText,
+        is_multi: qInfo.isMulti,
         options: qInfo.options.map(o => ({ label: o.label, text: o.text, index: o.index }))
       };
 
       const isLastQuestion = qInfo.qNum >= qInfo.totalQ;
 
       if (!isLastQuestion) {
-        // Select random choice (mandatory to enable submit button in Oracle APEX)
-        const randomIdx = Math.floor(Math.random() * qInfo.options.length);
-        saveQuizData({ harvested, totalQuestions: qInfo.totalQ });
+        let randomIndices = [];
+        if (qInfo.isMulti && qInfo.options.length > 2) {
+          const first = Math.floor(Math.random() * qInfo.options.length);
+          let second = (first + 1) % qInfo.options.length;
+          randomIndices = [first, second];
+        } else {
+          randomIndices = [Math.floor(Math.random() * qInfo.options.length)];
+        }
 
-        setHUDLog(`Selecting option ${qInfo.options[randomIdx]?.label || "A"} on Q${qInfo.qNum}...`);
+        saveQuizData({ harvested, totalQuestions: qInfo.totalQ });
+        const labelsStr = randomIndices.map(i => qInfo.options[i]?.label || "A").join(", ");
+        setHUDLog(`Selected option(s) ${labelsStr} on Q${qInfo.qNum}...`);
 
         setTimeout(() => {
-          bridgeMsg("OA_BRIDGE_SELECT_CHOICE", { index: randomIdx });
+          bridgeMsg("OA_BRIDGE_SELECT_CHOICES", { indices: randomIndices });
 
-          // Submit answer to move to next question
           setTimeout(() => {
             bridgeMsg("OA_BRIDGE_SUBMIT_QUIZ");
           }, 450);
@@ -295,7 +433,7 @@
           bridgeMsg("OA_BRIDGE_PREV_QUIZ");
         }, 400);
       } else {
-        // Returned to Question 1! Turn off harvest active flag
+        // Returned to Question 1!
         sessionStorage.removeItem("oa_quiz_harvest_active");
 
         const prompt = generateBatchPrompt(quizData.harvested, quizData.totalQuestions);
@@ -304,7 +442,6 @@
           batchPrompt: prompt
         });
 
-        // Copy to clipboard
         try {
           navigator.clipboard.writeText(prompt);
           setHUDLog(`✅ All questions harvested! Batch prompt copied to clipboard.`);
@@ -325,24 +462,25 @@
       return;
     }
 
-    // --- STATE 4: SOLVING ---
+    // --- STATE 4: SOLVING WITH SHUFFLE RESILIENCE ---
     if (quizData.state === "SOLVING" && isSolvingActive) {
       setHUDBadge("SOLVING", "running");
 
-      const targetLetter = (quizData.answers[qInfo.qNum] || "").toUpperCase();
-      let selectedIdx = -1;
+      const targetAnswers = quizData.answers[qInfo.qNum] || ["A"];
+      const harvestedQuestion = (quizData.harvested && quizData.harvested[qInfo.qNum]) ? quizData.harvested[qInfo.qNum].options : null;
 
-      if (targetLetter) {
-        selectedIdx = qInfo.options.findIndex(o => o.label === targetLetter);
-      }
-      if (selectedIdx === -1) {
-        selectedIdx = 0; // Default fallback
+      // Robust match: maps answer back to harvested option string and finds live shuffled element
+      const targetIndices = resolveShuffledIndices(targetAnswers, qInfo.options, harvestedQuestion);
+
+      if (!targetIndices.length) {
+        targetIndices.push(0); // Fallback
       }
 
-      setHUDLog(`Applying Q${qInfo.qNum} answer: ${targetLetter || "A"}...`);
+      const selectedTexts = targetIndices.map(i => qInfo.options[i]?.text || "").join(" | ");
+      setHUDLog(`Q${qInfo.qNum}: Matched & selecting [${selectedTexts}]...`);
 
       setTimeout(() => {
-        bridgeMsg("OA_BRIDGE_SELECT_CHOICE", { index: selectedIdx });
+        bridgeMsg("OA_BRIDGE_SELECT_CHOICES", { indices: targetIndices });
 
         const isLastQuestion = qInfo.qNum >= qInfo.totalQ;
 
@@ -362,7 +500,6 @@
       return;
     }
 
-    // Not actively harvesting or solving -> Stay IDLE
     setHUDBadge("IDLE", "stopped");
     setHUDLog("Quiz ready. Click 'Harvest Questions' when you want to begin.");
   }
@@ -388,10 +525,10 @@
             </div>
             <div class="oa-response-box">
               <div class="oa-box-title">
-                <span>Paste AI Response (e.g., 1: C, 2: A...):</span>
-                <span style="font-size: 11px; color: #94a3b8;">Format: &lt;Question&gt;: &lt;Option&gt;</span>
+                <span>Paste AI Response (supports single & multi options):</span>
+                <span style="font-size: 11px; color: #94a3b8;">Format: 1: C | 2: A, D | 3: B...</span>
               </div>
-              <textarea id="oa-response-textarea" class="oa-textarea" rows="6" placeholder="1: C&#10;2: A&#10;3: D&#10;..."></textarea>
+              <textarea id="oa-response-textarea" class="oa-textarea" rows="6" placeholder="1: C&#10;2: A, D&#10;3: B&#10;..."></textarea>
             </div>
           </div>
           <div class="oa-modal-footer">
@@ -421,7 +558,7 @@
       const parsedAnswers = parseAIAnswersText(respText);
 
       if (Object.keys(parsedAnswers).length === 0) {
-        alert("Please paste the AI answers in the format:\n1: C\n2: A\n3: D\n...");
+        alert("Please paste the AI answers in the format:\n1: C\n2: A, D\n3: B\n...");
         return;
       }
 
@@ -613,23 +750,35 @@
   }
 
   // =========================================================================
-  // ON-SCREEN HEADS-UP DISPLAY (HUD)
+  // ON-SCREEN HEADS-UP DISPLAY (HUD) WITH MINIMIZABLE WALL PILL
   // =========================================================================
   function injectHUD() {
     if (document.getElementById("oa-auto-hud")) return;
 
     const pageType = getPageType();
     const isQuizPage = pageType === "QUIZ";
+    const isInitiallyMinimized = localStorage.getItem("oa_hud_minimized") === "true";
 
     const hud = document.createElement("div");
     hud.id = "oa-auto-hud";
+    if (isInitiallyMinimized) {
+      hud.classList.add("minimized");
+    }
+
     hud.innerHTML = `
       <div class="oa-hud-header">
         <div class="oa-hud-title">
           <div id="oa-pulse" class="oa-hud-pulse"></div>
           <span>${isQuizPage ? "Assessment AI Solver" : "OA Auto-Progressor"}</span>
         </div>
-        <div id="oa-status-badge" class="oa-hud-status-badge stopped">OFF</div>
+        <div class="oa-hud-pill-expand">
+          <span>⚡ OA</span>
+          <span id="oa-pill-status">READY</span>
+        </div>
+        <div class="oa-hud-header-actions">
+          <div id="oa-status-badge" class="oa-hud-status-badge stopped">OFF</div>
+          <button id="oa-minimize-btn" class="oa-hud-min-btn" title="Minimize to side pill">−</button>
+        </div>
       </div>
       <div class="oa-hud-body">
         <div class="oa-hud-row">
@@ -666,6 +815,22 @@
     `;
 
     document.body.appendChild(hud);
+
+    // Minimize button toggle
+    const minBtn = document.getElementById("oa-minimize-btn");
+    minBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hud.classList.add("minimized");
+      localStorage.setItem("oa_hud_minimized", "true");
+    });
+
+    // Clicking minimized pill expands it back
+    hud.addEventListener("click", () => {
+      if (hud.classList.contains("minimized")) {
+        hud.classList.remove("minimized");
+        localStorage.removeItem("oa_hud_minimized");
+      }
+    });
 
     if (isQuizPage) {
       document.getElementById("oa-quiz-harvest-btn").addEventListener("click", () => {
@@ -716,6 +881,7 @@
     const sectionsDone = document.getElementById("oa-sections-done");
     const toggleBtn = document.getElementById("oa-toggle-btn");
     const quizStage = document.getElementById("oa-quiz-stage");
+    const pillStatus = document.getElementById("oa-pill-status");
 
     if (quizStage) quizStage.textContent = quizData.state;
 
@@ -727,12 +893,15 @@
       if (quizData.state === "HARVESTING" || quizData.state === "SOLVING") {
         if (badge) { badge.textContent = quizData.state; badge.className = "oa-hud-status-badge running"; }
         if (pulse) pulse.className = "oa-hud-pulse running";
+        if (pillStatus) pillStatus.textContent = quizData.state;
       } else if (quizData.state === "REWINDING" || quizData.state === "AWAITING_ANSWERS") {
         if (badge) { badge.textContent = quizData.state; badge.className = "oa-hud-status-badge quiz"; }
         if (pulse) pulse.className = "oa-hud-pulse";
+        if (pillStatus) pillStatus.textContent = quizData.state;
       } else {
         if (badge) { badge.textContent = "IDLE"; badge.className = "oa-hud-status-badge stopped"; }
         if (pulse) pulse.className = "oa-hud-pulse";
+        if (pillStatus) pillStatus.textContent = "IDLE";
       }
       return;
     }
@@ -744,19 +913,25 @@
       badge.className = "oa-hud-status-badge running";
       pulse.className = "oa-hud-pulse running";
       if (toggleBtn) { toggleBtn.textContent = "Pause"; toggleBtn.className = "oa-hud-btn danger"; }
+      if (pillStatus) pillStatus.textContent = "RUNNING";
     } else {
       badge.textContent = "PAUSED";
       badge.className = "oa-hud-status-badge stopped";
       pulse.className = "oa-hud-pulse";
       if (toggleBtn) { toggleBtn.textContent = "Start"; toggleBtn.className = "oa-hud-btn primary"; }
+      if (pillStatus) pillStatus.textContent = "PAUSED";
     }
   }
 
   function setHUDBadge(text, typeClass) {
     const badge = document.getElementById("oa-status-badge");
+    const pillStatus = document.getElementById("oa-pill-status");
     if (badge) {
       badge.textContent = text;
       badge.className = `oa-hud-status-badge ${typeClass}`;
+    }
+    if (pillStatus) {
+      pillStatus.textContent = text;
     }
   }
 

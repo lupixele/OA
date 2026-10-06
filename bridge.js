@@ -34,51 +34,71 @@
       }
     }
 
-    // 2. QUIZ SELECT CHOICE (GUARANTEED APEX RECOGNITION)
-    if (event.data.type === "OA_BRIDGE_SELECT_CHOICE") {
-      const index = event.data.index;
+    // 2. QUIZ SELECT CHOICE(S) (SUPPORTS SINGLE AND MULTI OPTIONS)
+    if (event.data.type === "OA_BRIDGE_SELECT_CHOICE" || event.data.type === "OA_BRIDGE_SELECT_CHOICES") {
+      const indices = Array.isArray(event.data.indices)
+        ? event.data.indices
+        : [event.data.index !== undefined ? event.data.index : 0];
+
       try {
-        const choiceBtns = document.querySelectorAll(".choice-SelectArea");
-        if (choiceBtns && choiceBtns[index]) {
-          const btn = choiceBtns[index];
+        const choiceBtns = Array.from(document.querySelectorAll(".choice-SelectArea"));
+        if (!choiceBtns.length) return;
 
-          // A. Trigger APEX toggleChoice if available in window
-          if (typeof toggleChoice === "function" && window.$) {
-            toggleChoice(window.$(btn));
-          } else if (window.apex && window.apex.jQuery) {
-            window.apex.jQuery(btn).trigger("click");
-          }
+        // Clear all existing choices first
+        if (typeof clearAllChoices === "function") {
+          clearAllChoices();
+        } else {
+          choiceBtns.forEach(btn => {
+            btn.setAttribute("aria-checked", "false");
+            const h = btn.querySelector(".qzlab-choice") || btn.querySelector('input[name="f01"]');
+            if (h) h.value = "N";
+            const ic = btn.querySelector(".choice-Icon");
+            if (ic) { ic.classList.remove("fa-check"); ic.classList.add("fa-square-o"); }
+          });
+        }
 
-          // B. Native DOM click
-          btn.click();
+        // Apply selection for all specified indices
+        indices.forEach(idx => {
+          if (choiceBtns[idx]) {
+            const btn = choiceBtns[idx];
 
-          // C. Explicitly set hidden choice value to 'Y' so APEX validation succeeds
-          const hiddenChoice = btn.querySelector(".qzlab-choice") || btn.querySelector('input[name="f01"]');
-          if (hiddenChoice) {
-            hiddenChoice.value = "Y";
-          }
+            if (typeof toggleChoice === "function" && window.$) {
+              toggleChoice(window.$(btn));
+            } else if (window.apex && window.apex.jQuery) {
+              window.apex.jQuery(btn).trigger("click");
+            }
 
-          // D. Explicitly set P190_CHOICE_CLICKED to 'Y'
-          if (window.apex && window.apex.item) {
-            const item = window.apex.item("P190_CHOICE_CLICKED");
-            if (item) item.setValue("Y");
-          }
+            btn.click();
+            btn.setAttribute("aria-checked", "true");
 
-          // E. Explicitly enable submit button
-          if (typeof enableSubmitButton === "function") {
-            enableSubmitButton();
-          } else {
-            const submitBtn = document.getElementById("quiz-submit");
-            if (submitBtn) {
-              submitBtn.disabled = false;
-              submitBtn.classList.remove("apex_disabled");
+            const hiddenChoice = btn.querySelector(".qzlab-choice") || btn.querySelector('input[name="f01"]');
+            if (hiddenChoice) hiddenChoice.value = "Y";
+
+            const icon = btn.querySelector(".choice-Icon");
+            if (icon) {
+              icon.classList.remove("fa-square-o");
+              icon.classList.add("fa-check");
             }
           }
+        });
 
-          console.log("[OA-Bridge] Successfully selected choice index:", index);
+        // Force validation & enable submit
+        if (typeof checkSubmitButton === "function") checkSubmitButton();
+        if (typeof enableSubmitButton === "function") enableSubmitButton();
+        if (window.apex && window.apex.item) {
+          const item = window.apex.item("P190_CHOICE_CLICKED");
+          if (item) item.setValue("Y");
         }
+
+        const submitBtn = document.getElementById("quiz-submit");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.classList.remove("apex_disabled");
+        }
+
+        console.log("[OA-Bridge] Successfully selected choices:", indices);
       } catch (err) {
-        console.warn("[OA-Bridge] Select choice err:", err);
+        console.warn("[OA-Bridge] Select choices err:", err);
       }
     }
 
