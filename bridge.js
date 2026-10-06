@@ -34,16 +34,48 @@
       }
     }
 
-    // 2. QUIZ SELECT CHOICE
+    // 2. QUIZ SELECT CHOICE (GUARANTEED APEX RECOGNITION)
     if (event.data.type === "OA_BRIDGE_SELECT_CHOICE") {
       const index = event.data.index;
       try {
         const choiceBtns = document.querySelectorAll(".choice-SelectArea");
         if (choiceBtns && choiceBtns[index]) {
-          if (window.apex && window.apex.jQuery) {
-            window.apex.jQuery(choiceBtns[index]).trigger("click");
+          const btn = choiceBtns[index];
+
+          // A. Trigger APEX toggleChoice if available in window
+          if (typeof toggleChoice === "function" && window.$) {
+            toggleChoice(window.$(btn));
+          } else if (window.apex && window.apex.jQuery) {
+            window.apex.jQuery(btn).trigger("click");
           }
-          choiceBtns[index].click();
+
+          // B. Native DOM click
+          btn.click();
+
+          // C. Explicitly set hidden choice value to 'Y' so APEX validation succeeds
+          const hiddenChoice = btn.querySelector(".qzlab-choice") || btn.querySelector('input[name="f01"]');
+          if (hiddenChoice) {
+            hiddenChoice.value = "Y";
+          }
+
+          // D. Explicitly set P190_CHOICE_CLICKED to 'Y'
+          if (window.apex && window.apex.item) {
+            const item = window.apex.item("P190_CHOICE_CLICKED");
+            if (item) item.setValue("Y");
+          }
+
+          // E. Explicitly enable submit button
+          if (typeof enableSubmitButton === "function") {
+            enableSubmitButton();
+          } else {
+            const submitBtn = document.getElementById("quiz-submit");
+            if (submitBtn) {
+              submitBtn.disabled = false;
+              submitBtn.classList.remove("apex_disabled");
+            }
+          }
+
+          console.log("[OA-Bridge] Successfully selected choice index:", index);
         }
       } catch (err) {
         console.warn("[OA-Bridge] Select choice err:", err);

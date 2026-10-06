@@ -10,7 +10,7 @@
 
   const DEFAULT_CONFIG = {
     active: false,
-    delayMs: 600,
+    delayMs: 800,
     skipQuizzes: true,
     autoLoopSections: true,
     clearedSections: [],
@@ -29,12 +29,12 @@
   let quizData = { ...DEFAULT_QUIZ };
   let isExecuting = false;
 
-  // --- Bridge Communication Helpers ---
+  // --- Main-World Bridge Communication ---
   function bridgeMsg(type, payload = {}) {
     window.postMessage({ type, ...payload }, "*");
   }
 
-  // --- Assessment / Quiz Keyword Matcher ---
+  // --- Assessment Keyword Matcher ---
   function isAssessmentText(text) {
     if (!text) return false;
     const lower = text.toLowerCase().trim();
@@ -44,15 +44,12 @@
   // --- Page Classifier ---
   function getPageType() {
     const url = window.location.href;
-    // Page 190 or #quiz-submit or #collapse-Choices-reg or P190 items
     if (url.includes(":190:") || document.getElementById("quiz-submit") || document.getElementById("collapse-Choices-reg")) {
       return "QUIZ";
     }
-    // Page 14 is Course Outline
     if (url.includes(":14:") || document.getElementById("courseol_heading")) {
       return "OUTLINE";
     }
-    // Page 15 is Inside Lesson
     if (url.includes(":15:") || document.getElementById("nextModButton") || document.querySelector(".t-WizardSteps")) {
       return "LESSON";
     }
@@ -74,7 +71,11 @@
 
     const pageType = getPageType();
     if (pageType === "QUIZ") {
-      handleQuizLifecycle();
+      bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
+      // Wait for dynamic APEX questions and choices to render before acting
+      waitForQuizReady((qInfo) => {
+        handleQuizLifecycle(qInfo);
+      });
     } else if (config.active) {
       bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
       scheduleCourseRun();
@@ -109,7 +110,7 @@
   }
 
   // =========================================================================
-  // QUIZ ENGINE: HARVESTING, REWINDING, AND AI SOLVING
+  // QUIZ ENGINE: ROBUST EXTRACTION & SOLVER
   // =========================================================================
 
   function parseCurrentQuestionDOM() {
@@ -130,24 +131,44 @@
     }
 
     // 2. Question Text
-    const qDynamic = document.querySelector('a-dynamic-content[region-id="question-Text"]');
     let qText = "";
-    if (qDynamic) {
-      const clone = qDynamic.cloneNode(true);
-      clone.querySelectorAll("input, script, style").forEach(el => el.remove());
+    const dynElem = document.querySelector('a-dynamic-content[region-id="question-Text"]') ||
+                    document.getElementById("question-Text");
+    if (dynElem) {
+      const clone = dynElem.cloneNode(true);
+      clone.querySelectorAll("input, script, style, .t-ContentBlock-header").forEach(el => el.remove());
       qText = clone.innerText.replace(/[\n\r]+/g, " ").replace(/\s+/g, " ").trim();
     }
 
-    // 3. Options
+    // 3. Choices
     const choiceButtons = Array.from(document.querySelectorAll(".choice-SelectArea"));
     const options = choiceButtons.map((btn, idx) => {
       const textSpan = btn.querySelector(".choice-Text");
       const label = String.fromCharCode(65 + idx); // A, B, C, D...
-      const text = textSpan ? textSpan.innerText.trim() : btn.getAttribute("aria-label") || "";
-      return { label, text, index: idx };
+      let text = textSpan ? textSpan.innerText.trim() : btn.getAttribute("aria-label") || "";
+      text = text.replace(/[\n\r]+/g, " ").trim();
+      return { label, text, index: idx, element: btn };
     });
 
     return { qNum, totalQ, qText, options };
+  }
+
+  // Poll until dynamic question and options are fully rendered by Oracle APEX
+  function waitForQuizReady(callback, maxWaitMs = 5000) {
+    const startTime = Date.now();
+
+    function poll() {
+      const qInfo = parseCurrentQuestionDOM();
+      const isReady = qInfo.qNum && qInfo.options.length > 0 && qInfo.qText.length > 0;
+
+      if (isReady || (Date.now() - startTime) >= maxWaitMs) {
+        callback(qInfo);
+      } else {
+        setTimeout(poll, 200);
+      }
+    }
+
+    poll();
   }
 
   function generateBatchPrompt(harvested, totalQ) {
@@ -162,7 +183,7 @@
     const keys = Object.keys(harvested).map(k => parseInt(k, 10)).sort((a, b) => a - b);
     for (const num of keys) {
       const q = harvested[num];
-      prompt += `Question ${num}:\n${q.text}\n`;
+      prompt += `Question ${num}: ${q.text}\n`;
       for (const opt of q.options) {
         prompt += `${opt.label}. ${opt.text}\n`;
       }
@@ -178,7 +199,6 @@
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      // Match "1: C" or "1. C" or "1 - C" or "Q1: C" or "Question 1: C"
       const match = trimmed.match(/^(?:Q(?:uestion)?\s*)?(\d+)[\s.:\)-]+([A-Za-z0-9]+)/i);
       if (match) {
         const qNum = parseInt(match[1], 10);
@@ -189,9 +209,11 @@
     return answers;
   }
 
-  function handleQuizLifecycle() {
-    const qInfo = parseCurrentQuestionDOM();
-    if (!qInfo.qNum || !qInfo.totalQ) return;
+  function handleQuizLifecycle(qInfo) {
+    if (!qInfo || !qInfo.qNum || !qInfo.totalQ) {
+      setHUDLog("Waiting for assessment question to load...");
+      return;
+    }
 
     setHUDCurrentItem(`Question ${qInfo.qNum} of ${qInfo.totalQ}`);
     bridgeMsg("OA_BRIDGE_SUPPRESS_WARNINGS");
@@ -201,31 +223,34 @@
       setHUDBadge("HARVESTING", "running");
       setHUDLog(`Extracting Q${qInfo.qNum}/${qInfo.totalQ}...`);
 
-      // Store current question data
       const harvested = { ...quizData.harvested };
       harvested[qInfo.qNum] = {
         q_num: qInfo.qNum,
         total_q: qInfo.totalQ,
         text: qInfo.qText,
-        options: qInfo.options
+        options: qInfo.options.map(o => ({ label: o.label, text: o.text, index: o.index }))
       };
 
       const isLastQuestion = qInfo.qNum >= qInfo.totalQ;
 
       if (!isLastQuestion) {
-        // Pick a random option
+        // Select random choice (mandatory to enable submit button in Oracle APEX)
         const randomIdx = Math.floor(Math.random() * qInfo.options.length);
         saveQuizData({ harvested, totalQuestions: qInfo.totalQ });
 
+        setHUDLog(`Selecting option ${qInfo.options[randomIdx]?.label || "A"} on Q${qInfo.qNum}...`);
+
         setTimeout(() => {
           bridgeMsg("OA_BRIDGE_SELECT_CHOICE", { index: randomIdx });
+
+          // Submit answer to move to next question
           setTimeout(() => {
             bridgeMsg("OA_BRIDGE_SUBMIT_QUIZ");
-          }, 350);
+          }, 450);
         }, config.delayMs);
 
       } else {
-        // Last question reached! Do NOT submit! Transition to REWINDING!
+        // Last question reached! DO NOT SUBMIT! Auto-rewind to Q1!
         setHUDLog(`All ${qInfo.totalQ} questions captured! Rewinding to Question 1...`);
         saveQuizData({
           harvested,
@@ -248,9 +273,9 @@
         setHUDLog(`Rewinding: Currently on Q${qInfo.qNum}...`);
         setTimeout(() => {
           bridgeMsg("OA_BRIDGE_PREV_QUIZ");
-        }, 350);
+        }, 400);
       } else {
-        // Reached Question 1!
+        // Returned to Question 1!
         const prompt = generateBatchPrompt(quizData.harvested, quizData.totalQuestions);
         saveQuizData({
           state: "AWAITING_ANSWERS",
@@ -285,16 +310,14 @@
       const targetLetter = (quizData.answers[qInfo.qNum] || "").toUpperCase();
       let selectedIdx = -1;
 
-      // Find matching option index
       if (targetLetter) {
         selectedIdx = qInfo.options.findIndex(o => o.label === targetLetter);
       }
       if (selectedIdx === -1) {
-        // Fallback default first option
-        selectedIdx = 0;
+        selectedIdx = 0; // Default fallback
       }
 
-      setHUDLog(`Setting Q${qInfo.qNum} answer: ${targetLetter || "A"}...`);
+      setHUDLog(`Applying Q${qInfo.qNum} answer: ${targetLetter || "A"}...`);
 
       setTimeout(() => {
         bridgeMsg("OA_BRIDGE_SELECT_CHOICE", { index: selectedIdx });
@@ -302,10 +325,9 @@
         const isLastQuestion = qInfo.qNum >= qInfo.totalQ;
 
         if (!isLastQuestion) {
-          // Submit and advance to next question
           setTimeout(() => {
             bridgeMsg("OA_BRIDGE_SUBMIT_QUIZ");
-          }, 400);
+          }, 450);
         } else {
           // CRITICAL: DO NOT SUBMIT ON LAST QUESTION!
           setHUDBadge("DONE", "stopped");
@@ -317,7 +339,6 @@
       return;
     }
 
-    // IDLE on quiz page
     setHUDBadge("QUIZ READY", "stopped");
   }
 
@@ -384,7 +405,7 @@
         answers: parsedAnswers,
         state: "SOLVING"
       });
-      handleQuizLifecycle();
+      waitForQuizReady(handleQuizLifecycle);
     });
   }
 
@@ -394,7 +415,7 @@
   }
 
   // =========================================================================
-  // COURSE ENGINE: SAVE & CONTINUE (LESSON & OUTLINE)
+  // COURSE LESSON ENGINE: SAVE & CONTINUE
   // =========================================================================
 
   function scheduleCourseRun() {
@@ -431,7 +452,6 @@
 
     setHUDCurrentItem(currentTitle);
 
-    // Skip quizzes when in course lesson mode
     const p15AssessmentId = document.getElementById("P15_ASSESSMENT_ID")?.value;
     const isCurrentQuiz = isAssessmentText(currentTitle) ||
                           isAssessmentText(activeStepText) ||
@@ -450,7 +470,6 @@
       return;
     }
 
-    // Save and Continue
     const nextBtn = document.getElementById("nextModButton");
     if (nextBtn && !nextBtn.disabled && !nextBtn.classList.contains("is-disabled")) {
       setHUDLog(`Saving module: "${currentTitle}"...`);
@@ -629,7 +648,7 @@
           answers: {},
           batchPrompt: ""
         });
-        handleQuizLifecycle();
+        waitForQuizReady(handleQuizLifecycle);
       });
 
       document.getElementById("oa-quiz-modal-btn").addEventListener("click", () => {
