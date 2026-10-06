@@ -12,17 +12,18 @@
       <div class="brand">
         <div class="brand-icon">⚡</div>
         <div class="brand-info">
-          <h1>OA Auto-Progressor</h1>
-          <span class="sub">Fast Oracle APEX Course Engine</span>
+          <h1>OA Assistant</h1>
+          <span class="sub">Course Progressor & Quiz AI Solver</span>
         </div>
       </div>
       <div id="statusBadge" class="status-badge stopped">OFF</div>
     </header>
 
     <main class="popup-body">
+      <!-- Course Progression Settings -->
       <section class="card">
         <div class="control-row">
-          <label>Execution Speed</label>
+          <label>Course Execution Speed</label>
           <div class="speed-selector">
             <button type="button" class="speed-btn active" data-speed="500">⚡ Fast (500ms)</button>
             <button type="button" class="speed-btn" data-speed="800">🚀 Normal (800ms)</button>
@@ -33,33 +34,39 @@
         <div class="control-row switch-row">
           <div class="switch-label">
             <span class="main-label">Auto-Loop All Sections</span>
-            <span class="desc-label">Traverse and clear entire outline</span>
+            <span class="desc-label">Traverse and complete entire course</span>
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="autoLoopToggle" checked>
             <span class="slider"></span>
           </label>
         </div>
+      </section>
 
-        <div class="control-row switch-row">
+      <!-- Quiz Harvester & AI Solver Card -->
+      <section class="card" style="border-color: rgba(56, 189, 248, 0.25); background: rgba(56, 189, 248, 0.04);">
+        <div class="control-row">
           <div class="switch-label">
-            <span class="main-label">Strict Quiz Exclusion</span>
-            <span class="desc-label">Never click or submit any quiz/exam</span>
+            <span class="main-label" style="color: #38bdf8;">Assessment AI Solver</span>
+            <span class="desc-label" id="quizStatusDesc">State: IDLE (Open a quiz to use)</span>
           </div>
-          <div class="locked-badge">LOCKED ON</div>
+        </div>
+        <div style="display: flex; gap: 6px; margin-top: 4px;">
+          <button id="harvestQuizBtn" class="btn btn-secondary" style="font-size: 11px; padding: 6px 8px;">1. Harvest Qs</button>
+          <button id="openSolverModalBtn" class="btn btn-primary" style="font-size: 11px; padding: 6px 8px; background: #0284c7;">2. AI Prompt</button>
         </div>
       </section>
 
       <div class="action-buttons">
-        <button id="mainToggleBtn" class="btn btn-primary">Start Auto-Runner</button>
+        <button id="mainToggleBtn" class="btn btn-primary">Start Course Auto-Runner</button>
         <button id="openOutlineBtn" class="btn btn-secondary">Open Course Outline</button>
-        <button id="resetCacheBtn" class="btn btn-secondary">Reset Progress Cache</button>
+        <button id="resetCacheBtn" class="btn btn-secondary">Reset Course Cache</button>
       </div>
     </main>
 
     <footer class="popup-footer">
       <span>Oracle Academy • APEX Engine</span>
-      <span class="version">v1.0.0</span>
+      <span class="version">v1.4.0</span>
     </footer>
   </div>
 

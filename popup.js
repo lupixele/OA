@@ -1,10 +1,12 @@
 const STORAGE_KEY = "oa_progressor_config";
+const QUIZ_STORAGE_KEY = "oa_quiz_data";
 
 const DEFAULT_CONFIG = {
   active: false,
   delayMs: 800,
   skipQuizzes: true,
-  autoLoopSections: true
+  autoLoopSections: true,
+  clearedSections: []
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -12,15 +14,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const mainToggleBtn = document.getElementById("mainToggleBtn");
   const autoLoopToggle = document.getElementById("autoLoopToggle");
   const openOutlineBtn = document.getElementById("openOutlineBtn");
+  const resetCacheBtn = document.getElementById("resetCacheBtn");
   const speedButtons = document.querySelectorAll(".speed-btn");
+  const quizStatusDesc = document.getElementById("quizStatusDesc");
+  const harvestQuizBtn = document.getElementById("harvestQuizBtn");
+  const openSolverModalBtn = document.getElementById("openSolverModalBtn");
 
   let currentConfig = { ...DEFAULT_CONFIG };
+  let currentQuiz = {};
 
-  // Load configuration
-  chrome.storage.local.get([STORAGE_KEY], (res) => {
-    if (res[STORAGE_KEY]) {
-      currentConfig = { ...DEFAULT_CONFIG, ...res[STORAGE_KEY] };
-    }
+  // Load config & quiz state
+  chrome.storage.local.get([STORAGE_KEY, QUIZ_STORAGE_KEY], (res) => {
+    if (res[STORAGE_KEY]) currentConfig = { ...DEFAULT_CONFIG, ...res[STORAGE_KEY] };
+    if (res[QUIZ_STORAGE_KEY]) currentQuiz = res[QUIZ_STORAGE_KEY];
     renderUI();
   });
 
@@ -29,12 +35,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (currentConfig.active) {
       statusBadge.textContent = "RUNNING";
       statusBadge.className = "status-badge running";
-      mainToggleBtn.textContent = "Pause Auto-Runner";
+      mainToggleBtn.textContent = "Pause Course Auto-Runner";
       mainToggleBtn.className = "btn btn-danger";
     } else {
       statusBadge.textContent = "PAUSED";
       statusBadge.className = "status-badge stopped";
-      mainToggleBtn.textContent = "Start Auto-Runner";
+      mainToggleBtn.textContent = "Start Course Auto-Runner";
       mainToggleBtn.className = "btn btn-primary";
     }
 
@@ -50,6 +56,12 @@ document.addEventListener("DOMContentLoaded", () => {
         btn.classList.remove("active");
       }
     });
+
+    // 4. Quiz Status
+    if (quizStatusDesc && currentQuiz.state) {
+      const qCount = Object.keys(currentQuiz.harvested || {}).length;
+      quizStatusDesc.textContent = `State: ${currentQuiz.state} (${qCount} Qs harvested)`;
+    }
   }
 
   function saveConfig() {
@@ -79,13 +91,46 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Reset Cache
-  const resetCacheBtn = document.getElementById("resetCacheBtn");
   if (resetCacheBtn) {
     resetCacheBtn.addEventListener("click", () => {
       currentConfig.clearedSections = [];
       saveConfig();
       resetCacheBtn.textContent = "Cache Cleared!";
-      setTimeout(() => { resetCacheBtn.textContent = "Reset Progress Cache"; }, 1500);
+      setTimeout(() => { resetCacheBtn.textContent = "Reset Course Cache"; }, 1500);
+    });
+  }
+
+  // Quiz Harvester Button
+  if (harvestQuizBtn) {
+    harvestQuizBtn.addEventListener("click", () => {
+      chrome.storage.local.set({
+        [QUIZ_STORAGE_KEY]: {
+          state: "HARVESTING",
+          harvested: {},
+          answers: {},
+          batchPrompt: ""
+        }
+      }, () => {
+        window.close();
+      });
+    });
+  }
+
+  // Quiz Solver Modal Button
+  if (openSolverModalBtn) {
+    openSolverModalBtn.addEventListener("click", () => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+              const modalBtn = document.getElementById("oa-quiz-modal-btn");
+              if (modalBtn) modalBtn.click();
+            }
+          });
+          window.close();
+        }
+      });
     });
   }
 
