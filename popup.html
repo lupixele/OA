@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oracle Academy Auto-Progressor</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="popup-header">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-info">
+          <h1>OA Auto-Progressor</h1>
+          <span class="sub">Fast Oracle APEX Course Engine</span>
+        </div>
+      </div>
+      <div id="statusBadge" class="status-badge stopped">OFF</div>
+    </header>
+
+    <main class="popup-body">
+      <section class="card">
+        <div class="control-row">
+          <label>Execution Speed</label>
+          <div class="speed-selector">
+            <button type="button" class="speed-btn active" data-speed="500">⚡ Fast (500ms)</button>
+            <button type="button" class="speed-btn" data-speed="800">🚀 Normal (800ms)</button>
+            <button type="button" class="speed-btn" data-speed="1500">🛡 Safe (1.5s)</button>
+          </div>
+        </div>
+
+        <div class="control-row switch-row">
+          <div class="switch-label">
+            <span class="main-label">Auto-Loop All Sections</span>
+            <span class="desc-label">Traverse and clear entire outline</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="autoLoopToggle" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="control-row switch-row">
+          <div class="switch-label">
+            <span class="main-label">Strict Quiz Exclusion</span>
+            <span class="desc-label">Never click or submit any quiz/exam</span>
+          </div>
+          <div class="locked-badge">LOCKED ON</div>
+        </div>
+      </section>
+
+      <div class="action-buttons">
+        <button id="mainToggleBtn" class="btn btn-primary">Start Auto-Runner</button>
+        <button id="openOutlineBtn" class="btn btn-secondary">Open Course Outline</button>
+        <button id="resetCacheBtn" class="btn btn-secondary">Reset Progress Cache</button>
+      </div>
+    </main>
+
+    <footer class="popup-footer">
+      <span>Oracle Academy • APEX Engine</span>
+      <span class="version">v1.0.0</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

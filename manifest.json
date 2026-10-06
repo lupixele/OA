@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Oracle Academy Auto-Progressor",
+  "version": "1.3.0",
+  "description": "Reliable automated course progressor for Oracle Academy that saves lessons while skipping quizzes.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://academy.oracle.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Oracle Academy Auto-Progressor",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://academy.oracle.com/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://academy.oracle.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "hud.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
